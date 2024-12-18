@@ -6,129 +6,149 @@
 
 #include "vector.h"
 
-#define V_AT(v, idx) ((void*)((uint8_t*)(v)->data + (idx) * (v)->esize))
+#define INITIAL_CAPACITY 2
 
-static int v_grow(struct vector* v, size_t extra_space)
+#define item_at(vector, idx) ((uint8_t*)(v)->items + (idx) * (v)->itemsize)
+
+static int vec_grow(struct vector* v, size_t requested_cap)
 {
-        void* newdata;
-        size_t newcp;
+	void*  newptr;
+	size_t mycap;
 
-        assert(v != NULL && extra_space >= 1);
+	assert(v != NULL && v->items != NULL && requested_cap > v->capacity);
 
-        if (v->cap == 0) {
-                newcp = extra_space;
-        } else {
-                newcp = v->cap < 4096/v->esize
-                        ? v->cap + v->cap
-                        : v->cap + v->cap/2;
+	mycap = v->capacity * 2 + 1;
+	if (requested_cap > mycap) {
+		mycap = requested_cap;
+	}
 
-                newcp += extra_space;
-        }
+	if ((newptr = realloc(v->items, mycap * v->itemsize)) == NULL) {
+		return -1;
+	}
 
-        newdata = v->data == NULL
-                ? malloc(newcp * v->esize)
-                : realloc(v->data, newcp * v->esize);
-        
-        if (newdata == NULL)
-                return -1;
+	v->items    = newptr;
+	v->capacity = mycap;
 
-        v->data = newdata;
-        v->cap = newcp;
-
-        return 0;
+	return 0;
 }
 
-void* v_front(struct vector* v)
+static void vec_shrink(struct vector* v)
 {
-        if (v->cnt > 0)
-                return v->data;
+	assert(v != NULL && v->items != NULL);
 
-        return NULL;
+	if (v->count <= (1/4) * v->capacity) {
+		size_t half   = v->itemsize * (v->capacity/2);
+		void*  newptr = realloc(v->items, half);
+
+		if (newptr == NULL) {
+			return;
+		}
+
+		v->items = newptr;
+		v->capacity = half;
+	}
 }
 
-void* v_back(struct vector* v)
+void* vec_get(struct vector* v, size_t idx)
 {
-        if (v->cnt > 0)
-                return V_AT(v, v->cnt-1);
+	if (idx >= v->count) {
+		return NULL;
+	}
 
-        return NULL;
+	return item_at(v, idx);
 }
 
-void* v_at(struct vector* v, size_t idx)
+void* vec_front(struct vector* v)
 {
-        if (idx < v->cnt)
-                return V_AT(v, idx);
-
-        return NULL;
+	return vec_get(v, 0);
 }
 
-int v_delete_at(struct vector* v, size_t idx)
+void* vec_rear(struct vector* v)
 {
-        if (idx >= v->cnt) 
-                return -1;
-
-        v->cnt -= 1;
-
-        memmove(V_AT(v, idx), V_AT(v, idx+1), v->cnt * v->esize);
-
-        return 0;
+	return vec_get(v, v->count-1);
 }
 
-int v_delete(struct vector* v)
+int vec_pop(struct vector* v)
 {
-        if (v->cnt < 1)
-                return -1;
+	if (v->count == 0) {
+		return -1;
+	}
 
-        v->cnt -= 1;
+	v->count -= 1;
+	vec_shrink(v);
 
-        return 0;
+	return 0;
 }
 
-int v_swap(struct vector* v, size_t to, size_t from)
+int vec_insert(struct vector* v, void* item, size_t idx)
 {
-        if (from < v->cnt && to < v->cnt && from != to) {
-                uint8_t buf[v->esize];
+	size_t newcnt;
 
-                memmove(buf, V_AT(v, to), v->esize);
-                memmove(V_AT(v, to), V_AT(v, from), v->esize);
-                memmove(V_AT(v, from), buf, v->esize);
+	assert(v != NULL && v->items != NULL && item != NULL);
 
-                return 0;
-        }
+	if (idx <= v->count) {
+		newcnt = v->count + 1;
+	} else {
+		newcnt = v->count + (idx - v->count + 1);
+	}
 
-        return -1;
+	if (newcnt > v->capacity) {
+		if (vec_grow(v, newcnt) == -1) {
+			return -1;
+		}
+	}
+
+	if (idx < v->count) {
+		size_t nbytes = v->itemsize * (v->count - idx);
+		memmove(item_at(v, idx+1), item_at(v, idx), nbytes);
+	} else if (idx > v->count) {
+		size_t gap = idx - v->count;
+		memset(item_at(v, v->count), 0, gap * v->itemsize);
+	}
+
+	memcpy(item_at(v, idx), item, v->itemsize);
+	v->count = newcnt;
+
+	return 0;
 }
 
-int v_add_at(struct vector* v, void* data, size_t n_elements, size_t idx)
+int vec_prepend(struct vector* v, void* item)
 {
-        size_t newcnt = v->cnt + n_elements;
-
-        assert(v != NULL && n_elements >= 1);
-
-        if (newcnt > v->cap
-         && v_grow(v, n_elements) == -1)
-                return -1;
-
-        memmove(V_AT(v, idx + n_elements), V_AT(v, idx), v->esize * (v->cnt - idx));
-        memcpy(V_AT(v, idx), data, n_elements * v->esize);
-
-        v->cnt = newcnt;
-        return 0;
+	return vec_insert(v, item, 0);
 }
 
-int v_add(struct vector* v, void* data, size_t n_elements)
+int vec_append(struct vector* v, void* item)
 {
-        size_t newcount = v->cnt + n_elements;
+	return vec_insert(v, item, v->count);
+}
 
-        assert(v != NULL && n_elements >= 1);
+void vec_destroy(struct vector* v)
+{
+	assert(v != NULL);
 
-        if (newcount > v->cap
-         && v_grow(v, n_elements) == -1)
-                return -1;
+	v->itemsize = 0;
+	v->count    = 0;
+	v->capacity = 0;
 
-        memcpy(V_AT(v, v->cnt), data, n_elements * v->esize); 
+	if (v->items == NULL) {
+		return;
+	}
 
-        v->cnt = newcount;
+	free(v->items);
+	v->items = NULL;
+}
 
-        return 0;
+int vec_init(struct vector* v, size_t itemsize)
+{
+	assert(v != NULL && itemsize > 0);
+
+	if ((v->items = malloc(INITIAL_CAPACITY * itemsize)) == NULL) {
+		return -1;
+	}
+
+	v->itemsize = itemsize;
+	v->count    = 0;
+	v->capacity = INITIAL_CAPACITY;
+
+	return 0;
 }
